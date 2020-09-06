@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/segmentio/ksuid"
 	"strings"
+	"sync"
 )
 
 type indexMap struct {
@@ -88,40 +89,41 @@ func (appindex *appIndexes) addIndex(parsed map[string]interface{}) (documentID 
 
 func (appindex *appIndexes) search(input string, fields []string) (documentIDs []string) {
 	var output []string
+	var wg sync.WaitGroup
 	// Tokenize input
-	for _, token := range lowercaseTokens(tokenizeString(input)) {
+	tokenized := lowercaseTokens(tokenizeString(input))
+	for _, token := range tokenized {
 		// Check fields
 		if len(fields) == 0 { // check all
 			// fmt.Println("### No fields given, searching all fields...")
-			for _, indexmap := range appindex.indexes {
-				// fmt.Println("### Searching index:", indexmap.field, "for", token)
-				output = append(output, indexmap.search(token)...)
+			for i := 0; i < len(appindex.indexes); i++ {
+				wg.Add(1)
+				go appindex.indexes[i].search(token, &output, &wg)
 			}
 		} else { // check given fields
-			for _, field := range fields {
+			for i := 0; i < len(fields); i++ {
 				// fmt.Println("### Searching index:", field, "for", token)
-				docIDs := appindex.searchByField(token, field)
-				if docIDs == nil {
-					// fmt.Println("### Field doesn't exist:", field)
-					continue
-				}
-				output = append(output, docIDs...)
+				appindex.searchByField(token, fields[i], &output, &wg)
 			}
+			// for _, field := range fields {
+			// 	// fmt.Println("### Searching index:", field, "for", token)
+			// 	appindex.searchByField(token, field, &output, &wg)
+			// }
 		}
 	}
+	wg.Wait()
 	return output
 }
 
-func (appindex *appIndexes) searchByField(input string, field string) (documentIDs []string) {
+func (appindex *appIndexes) searchByField(input string, field string, output *[]string, wg *sync.WaitGroup) {
 	// Check if field exists
-	var output []string
-	for _, indexmap := range appindex.indexes {
-		if indexmap.field == field {
-			output = append(output, indexmap.search(input)...)
+	for i := 0; i < len(appindex.indexes); i++ {
+		if appindex.indexes[i].field == field {
+			wg.Add(1)
+			go appindex.indexes[i].search(input, output, wg)
 			break
 		}
 	}
-	return output
 }
 
 // ########################################################################
@@ -151,6 +153,8 @@ func (indexmap *indexMap) addIndex(id string, value string) {
 	}
 }
 
-func (indexmap *indexMap) search(input string) (documentIDs []string) {
-	return indexmap.index[input]
+func (indexmap *indexMap) search(input string, output *[]string, wg *sync.WaitGroup) {
+	defer wg.Done()
+	docIDs := indexmap.index[input]
+	*output = append(*output, docIDs...)
 }
